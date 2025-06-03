@@ -1,7 +1,8 @@
-package com.example.invitedby;
+package com.spinner.invitedbymod;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
+import me.lucko.fabric.api.permissions.v0.Permissions;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.server.command.ServerCommandSource;
@@ -12,14 +13,9 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.lang.reflect.Type;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
-import me.lucko.fabric.api.permissions.v0.Permissions;
-
-import static net.minecraft.command.arguments.EntityArgumentType.player;
+import static net.minecraft.command.argument.EntityArgumentType.player;
 import static net.minecraft.server.command.CommandManager.argument;
 import static net.minecraft.server.command.CommandManager.literal;
 
@@ -36,8 +32,13 @@ public class InvitedByMod implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
-		dataFile = new File("config/invitedby.json");
-		configFile = new File("config/invitedby-config.json");
+		File configDir = new File("config");
+		if (!configDir.exists()) {
+			configDir.mkdirs();
+		}
+
+		dataFile = new File(configDir, "invitedby.json");
+		configFile = new File(configDir, "invitedby-config.json");
 
 		loadData();
 		loadConfig();
@@ -45,7 +46,6 @@ public class InvitedByMod implements ModInitializer {
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			dispatcher.register(
 					literal("invitedby")
-							// Normal user command requires invitedby.use permission
 							.requires(src -> Permissions.check(src, "invitedby.use", 0))
 							.then(argument("inviter", player())
 									.executes(context -> {
@@ -69,30 +69,29 @@ public class InvitedByMod implements ModInitializer {
 										invitedMap.put(invitedUUID, inviterUUID);
 										saveData();
 
-										source.sendFeedback(Text.literal("Invitation registered. Rewards granted!"), false);
+										source.sendFeedback(() -> Text.literal("Invitation registered. Rewards granted!"), false);
 
-										// Run rewards for invited
+										String invitedName = invitedPlayer.getName().getString();
+										String inviterName = inviterPlayer.getName().getString();
+
 										for (String cmd : config.invitedCommands) {
-											String commandToRun = cmd.replace("%player%", invitedPlayer.getEntityName());
-											source.getMinecraftServer().getCommandManager().execute(source, commandToRun);
+											String commandToRun = cmd.replace("%player%", invitedName);
+											source.getServer().getCommandManager().executeWithPrefix(source, commandToRun);
 										}
 
-										// Run rewards for inviter
-										String inviterName = inviterPlayer.getEntityName();
 										for (String cmd : config.inviterCommands) {
 											String commandToRun = cmd.replace("%player%", inviterName);
-											source.getMinecraftServer().getCommandManager().execute(source, commandToRun);
+											source.getServer().getCommandManager().executeWithPrefix(source, commandToRun);
 										}
 
 										return 1;
 									})
 							)
-							// Admin subcommands require invitedby.admin permission
 							.then(literal("reload")
 									.requires(src -> Permissions.check(src, "invitedby.admin", 2))
 									.executes(context -> {
 										loadConfig();
-										context.getSource().sendFeedback(Text.literal("InvitedBy config reloaded."), false);
+										context.getSource().sendFeedback(() -> Text.literal("InvitedBy config reloaded."), false);
 										return 1;
 									})
 							)
@@ -105,9 +104,10 @@ public class InvitedByMod implements ModInitializer {
 
 												if (invitedMap.remove(targetUUID) != null) {
 													saveData();
-													context.getSource().sendFeedback(Text.literal("Reset invite status for " + target.getEntityName()), false);
+													context.getSource().sendFeedback(() ->
+															Text.literal("Reset invite status for " + target.getName().getString()), false);
 												} else {
-													context.getSource().sendError(Text.literal("Player " + target.getEntityName() + " has no invite status."));
+													context.getSource().sendError(Text.literal("Player " + target.getName().getString() + " has no invite status."));
 												}
 												return 1;
 											})
@@ -121,12 +121,18 @@ public class InvitedByMod implements ModInitializer {
 												String targetUUID = target.getUuidAsString();
 
 												if (invitedMap.containsKey(targetUUID)) {
-													String inviterUUID = invitedMap.get(targetUUID);
-													ServerPlayerEntity inviter = context.getSource().getMinecraftServer().getPlayerManager().getPlayer(inviterUUID);
-													String inviterName = inviter != null ? inviter.getEntityName() : "Unknown (offline)";
-													context.getSource().sendFeedback(Text.literal(target.getEntityName() + " was invited by " + inviterName), false);
+													try {
+														UUID inviterUUID = UUID.fromString(invitedMap.get(targetUUID));
+														ServerPlayerEntity inviter = context.getSource().getServer().getPlayerManager().getPlayer(inviterUUID);
+														String inviterName = inviter != null ? inviter.getName().getString() : "Unknown (offline)";
+														context.getSource().sendFeedback(() ->
+																Text.literal(target.getName().getString() + " was invited by " + inviterName), false);
+													} catch (IllegalArgumentException e) {
+														context.getSource().sendFeedback(() -> Text.literal("Invalid inviter UUID format."), false);
+													}
 												} else {
-													context.getSource().sendFeedback(Text.literal(target.getEntityName() + " has not declared an inviter."), false);
+													context.getSource().sendFeedback(() ->
+															Text.literal(target.getName().getString() + " has not declared an inviter."), false);
 												}
 												return 1;
 											})
@@ -136,13 +142,15 @@ public class InvitedByMod implements ModInitializer {
 		});
 	}
 
-	private void loadData() {
+	private synchronized void loadData() {
 		try {
 			if (dataFile.exists()) {
 				try (FileReader reader = new FileReader(dataFile)) {
 					invitedMap = GSON.fromJson(reader, MAP_TYPE);
 					if (invitedMap == null) invitedMap = new HashMap<>();
 				}
+			} else {
+				invitedMap = new HashMap<>();
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -150,9 +158,11 @@ public class InvitedByMod implements ModInitializer {
 		}
 	}
 
-	private void saveData() {
+	private synchronized void saveData() {
 		try {
-			dataFile.getParentFile().mkdirs();
+			if (!dataFile.getParentFile().exists()) {
+				dataFile.getParentFile().mkdirs();
+			}
 			try (FileWriter writer = new FileWriter(dataFile)) {
 				GSON.toJson(invitedMap, writer);
 			}
@@ -161,7 +171,7 @@ public class InvitedByMod implements ModInitializer {
 		}
 	}
 
-	private void loadConfig() {
+	private synchronized void loadConfig() {
 		try {
 			if (configFile.exists()) {
 				try (FileReader reader = new FileReader(configFile)) {
@@ -171,6 +181,9 @@ public class InvitedByMod implements ModInitializer {
 			if (config == null) {
 				setDefaultConfig();
 				saveConfig();
+			} else {
+				if (config.invitedCommands == null) config.invitedCommands = List.of();
+				if (config.inviterCommands == null) config.inviterCommands = List.of();
 			}
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -178,9 +191,11 @@ public class InvitedByMod implements ModInitializer {
 		}
 	}
 
-	private void saveConfig() {
+	private synchronized void saveConfig() {
 		try {
-			configFile.getParentFile().mkdirs();
+			if (!configFile.getParentFile().exists()) {
+				configFile.getParentFile().mkdirs();
+			}
 			try (FileWriter writer = new FileWriter(configFile)) {
 				GSON.toJson(config, writer);
 			}
