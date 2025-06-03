@@ -1,0 +1,10 @@
+{
+  "inviterCommands": [
+    "give %player% minecraft:diamond 2",
+    "say Congratulations %player%, you earned a reward for inviting a friend!"
+  ],
+  "invitedCommands": [
+    "give %player% minecraft:emerald 5",
+    "say Welcome %player%, thanks for joining with an invite!"
+  ]
+}
